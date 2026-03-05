@@ -1013,7 +1013,7 @@ function Inversiones() {
 
       <Card>
         <Table
-          headers={["Instrumento", "Tipo", "Capital", "Rto. %", "Inicio", "Vencimiento", "Notas", ""]}
+          headers={["Instrumento", "Tipo", "Capital", "Ganancia Est.", "Rto. %", "Inicio", "Vencimiento", "Notas", ""]}
           rows={sortedInversiones.map(x => {
             const hoy = new Date();
             hoy.setHours(0, 0, 0, 0);
@@ -1033,6 +1033,9 @@ function Inversiones() {
               <span style={{ fontWeight: 500 }}>{x.nombre}</span>,
               <Tag color="var(--blue)">{x.tipo}</Tag>,
               <Mono style={{ color: "var(--blue)" }}>{clp(x.monto)}</Mono>,
+              x.ganancia != null
+                ? <Mono style={{ color: "var(--accent)", fontWeight: 700 }}>{clp(x.ganancia)}</Mono>
+                : <Mono style={{ color: "var(--muted)" }}>—</Mono>,
               <Mono style={{ color: "var(--gold)" }}>{x.rendimiento || 0}% <span style={{ fontSize: 10, color: "var(--muted)" }}>{x.rendimientoTipo === "mensual" ? "mensual" : "anual"}</span></Mono>,
               <Mono style={{ color: "var(--muted)" }}>{x.fecha}</Mono>,
               x.fechaTermino ? (
