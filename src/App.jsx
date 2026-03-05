@@ -120,7 +120,10 @@ function Provider({ children, user }) {
     const { data: user } = await supabase.auth.getUser();
     if (!user?.user) return;
 
-    const dbItem = { ...item, user_id: user.user.id };
+    // Remove empty id if it exists so Supabase can auto-generate it
+    const { id, ...dbItemWithoutId } = item;
+    const dbItem = { ...dbItemWithoutId, user_id: user.user.id };
+
     // Optimistic UI update
     const newId = Date.now();
     setData(d => ({ ...d, [k]: [...d[k], { ...item, id: newId }] }));
@@ -132,7 +135,7 @@ function Provider({ children, user }) {
       // Replace optimistic ID with real Supabase UUID
       setData(d => ({ ...d, [k]: d[k].map(x => x.id === newId ? insertedData[0] : x) }));
     } else {
-      console.error("Error adding:", error);
+      console.error("Error adding to", k, error);
       // Revert optimism on error
       setData(d => ({ ...d, [k]: d[k].filter(x => x.id !== newId) }));
     }
