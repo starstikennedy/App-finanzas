@@ -1,0 +1,321 @@
+// ─── IMPORTAR PDF ───────────────────────────────────────────────────────────────
+const CATS_SUGGEST = [
+  { kw: ['spotify','netflix','disney','amazon','prime','youtube','hbo','apple','suscripcion'], cat: 'Suscripciones' },
+  { kw: ['internet','vtr','movistar','entel','claro','wom','celular','telefono'], cat: 'Servicios' },
+  { kw: ['uber','cabify','didi','transporte','buses','metro'], cat: 'Transporte' },
+  { kw: ['supermercado','lider','jumbo','unimarc','santa isabel','tottus','acuenta','alimento','comida'], cat: 'Alimentación' },
+  { kw: ['farmacia','clinica','hospital','salud','medico'], cat: 'Salud' },
+  { kw: ['adobe','figma','github','herramienta','software','aws','google'], cat: 'Herramientas' },
+  { kw: ['coursera','udemy','duolingo','educacion','estudio','speak'], cat: 'Educación' },
+  { kw: ['falabella','ripley','paris','mercadopago','mercado','tienda','compra','payu','ohana'], cat: 'Personal' },
+];
+
+function suggestCat(desc) {
+  const d = (desc || '').toLowerCase();
+  for (const { kw, cat } of CATS_SUGGEST) {
+    if (kw.some(k => d.includes(k))) return cat;
+  }
+  return 'Otros';
+}
+
+function parseCLP(s) {
+  if (!s) return 0;
+  return parseInt(String(s).replace(/[^0-9]/g, ''), 10) || 0;
+}
+
+async function extractTextFromPDF(file) {
+  const pdfjsLib = window.pdfjsLib;
+  if (!pdfjsLib) throw new Error('pdf.js no cargado. Recarga la página e intenta de nuevo.');
+  const arrayBuffer = await file.arrayBuffer();
+  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+  let pages = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    const tc = await page.getTextContent();
+    // Group items by approximate Y position (row)
+    const byY = {};
+    for (const item of tc.items) {
+      const y = Math.round(item.transform[5]);
+      if (!byY[y]) byY[y] = [];
+      byY[y].push({ x: item.transform[4], text: item.str });
+    }
+    // Sort rows top-to-bottom
+    const sortedYs = Object.keys(byY).map(Number).sort((a, b) => b - a);
+    for (const y of sortedYs) {
+      const rowText = byY[y].sort((a, b) => a.x - b.x).map(i => i.text).join(' ');
+      pages.push(rowText);
+    }
+    pages.push('---PAGE---');
+  }
+  return pages.join('\n');
+}
+
+function parseCartola(text) {
+  const rows = [];
+  const lines = text.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (!line || line.startsWith('---')) continue;
+
+    // Must start with a date like "02/02" or "30/01"
+    const dateMatch = line.match(/^(\d{1,2}\/\d{2})\s+(.+)/);
+    if (!dateMatch) continue;
+
+    const fecha = dateMatch[1];
+    const rest = dateMatch[2];
+
+    // Skip headers
+    if (/DETALLE|SUCURSAL|SALDO|DOCTO/i.test(rest)) continue;
+
+    // Extract all numeric values from the line
+    const numMatches = [...rest.matchAll(/(\d[\d.]*)/g)].map(m => parseCLP(m[1])).filter(n => n > 0);
+
+    // Extract description: text before the first block of numbers
+    const descRaw = rest.replace(/\s*\d[\d.]*.*$/, '').trim();
+    const desc = descRaw.replace(/\s+/g, ' ').trim();
+    if (!desc || desc.length < 2) continue;
+
+    // The cartola columns are: [SUCURSAL?] [N_DOCTO?] [CARGO] [ABONO] [SALDO]
+    // We heuristically pick the first meaningful amount as either cargo or abono
+    let cargo = 0, abono = 0;
+
+    const isIncoming = /traspaso de|deposito|transferencia de|abono|remuneracion|sueldo/i.test(desc);
+
+    if (numMatches.length >= 2) {
+      // If two numbers and first looks like a cargo/abono, then second is saldo
+      cargo = isIncoming ? 0 : numMatches[0];
+      abono = isIncoming ? numMatches[0] : 0;
+    } else if (numMatches.length === 1) {
+      if (isIncoming) { abono = numMatches[0]; }
+      else { cargo = numMatches[0]; }
+    }
+
+    if (cargo === 0 && abono === 0) continue;
+
+    rows.push({
+      fecha,
+      desc,
+      cargo,
+      abono,
+      tipo: abono > 0 && cargo === 0 ? 'ingreso' : 'gasto',
+      cat: abono > 0 && cargo === 0 ? 'Freelance' : suggestCat(desc),
+      selected: true,
+      id: Math.random(),
+    });
+  }
+  return rows;
+}
+
+function Importar() {
+  const { add } = useF();
+  const [status, setStatus] = useState('idle');
+  const [rows, setRows] = useState([]);
+  const [drag, setDrag] = useState(false);
+  const [errMsg, setErrMsg] = useState('');
+  const [imported, setImported] = useState(0);
+  const curYear = new Date().getFullYear();
+
+  function handleFile(file) {
+    if (!file || file.type !== 'application/pdf') {
+      setErrMsg('Por favor selecciona un archivo PDF válido.');
+      setStatus('error');
+      return;
+    }
+    setStatus('loading');
+    setErrMsg('');
+    extractTextFromPDF(file)
+      .then(text => {
+        const parsed = parseCartola(text);
+        if (parsed.length === 0) {
+          setErrMsg('No se encontraron transacciones. Asegúrate de que sea una cartola bancaria chilena válida.');
+          setStatus('error');
+        } else {
+          setRows(parsed);
+          setStatus('preview');
+        }
+      })
+      .catch(e => {
+        setErrMsg('Error al leer el PDF: ' + e.message);
+        setStatus('error');
+      });
+  }
+
+  function onDrop(e) {
+    e.preventDefault();
+    setDrag(false);
+    handleFile(e.dataTransfer.files[0]);
+  }
+
+  function toggleRow(id) {
+    setRows(r => r.map(x => x.id === id ? { ...x, selected: !x.selected } : x));
+  }
+
+  function toggleAll() {
+    const allSel = rows.every(r => r.selected);
+    setRows(r => r.map(x => ({ ...x, selected: !allSel })));
+  }
+
+  function updateRow(id, key, val) {
+    setRows(r => r.map(x => x.id === id ? { ...x, [key]: val } : x));
+  }
+
+  function doImport() {
+    const selected = rows.filter(r => r.selected);
+    let count = 0;
+    for (const r of selected) {
+      const [d, m] = r.fecha.split('/');
+      const fecha = `${curYear}-${m.padStart(2,'0')}-${d.padStart(2,'0')}`;
+      if (r.tipo === 'ingreso') {
+        add('ingresos', { nombre: r.desc, categoria: r.cat, monto: r.abono, fecha, recurrente: false });
+      } else {
+        add('gastos', { nombre: r.desc, categoria: r.cat, monto: r.cargo, fecha, recurrente: false });
+      }
+      count++;
+    }
+    setImported(count);
+    setStatus('done');
+  }
+
+  const selectedCount = rows.filter(r => r.selected).length;
+  const gastosCats = ['Servicios','Suscripciones','Herramientas','Personal','Educación','Salud','Alimentación','Transporte','Otros'];
+  const ingresosCats = ['Freelance','Coaching','Competencias','Empleado','Negocio','Arriendo','Otro'];
+
+  return (
+    <div className="page">
+      <PageHeader title="Importar PDF" sub="Sube tu cartola bancaria · los datos se clasifican automáticamente" />
+
+      {status === 'idle' && (
+        <Card
+          style={{ padding: 56, textAlign: 'center', cursor: 'pointer',
+            border: drag ? '2px dashed var(--accent)' : '2px dashed var(--border-hi)',
+            background: drag ? 'var(--accent-dim2)' : 'var(--bg-card)', transition: 'all 0.2s' }}
+          onDragOver={e => { e.preventDefault(); setDrag(true); }}
+          onDragLeave={() => setDrag(false)}
+          onDrop={onDrop}
+        >
+          <div style={{ fontSize: 52, marginBottom: 16 }}>📄</div>
+          <Display style={{ fontWeight: 700, fontSize: 22, display: 'block', marginBottom: 8 }}>
+            Arrastra tu cartola PDF aquí
+          </Display>
+          <Mono style={{ fontSize: 13, color: 'var(--muted)', display: 'block', marginBottom: 28 }}>
+            Compatible con BancoEstado · Banco Chile · Santander · BCI y otros
+          </Mono>
+          <label style={{ display: 'inline-block', background: 'var(--accent)', color: '#000',
+              padding: '11px 28px', borderRadius: 8, fontWeight: 700, fontSize: 14,
+              cursor: 'pointer', fontFamily: 'var(--display)' }}>
+            Seleccionar archivo PDF
+            <input type="file" accept=".pdf" style={{ display: 'none' }} onChange={e => handleFile(e.target.files[0])} />
+          </label>
+        </Card>
+      )}
+
+      {status === 'loading' && (
+        <Card style={{ padding: 72, textAlign: 'center' }}>
+          <div style={{ fontSize: 40, marginBottom: 16, display: 'inline-block', animation: 'spin 1s linear infinite' }}>⟳</div>
+          <Display style={{ fontWeight: 700, fontSize: 18, display: 'block', color: 'var(--muted)' }}>Analizando PDF…</Display>
+        </Card>
+      )}
+
+      {status === 'error' && (
+        <Card style={{ padding: 40, textAlign: 'center' }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>⚠️</div>
+          <Mono style={{ color: 'var(--red)', display: 'block', marginBottom: 24 }}>{errMsg}</Mono>
+          <Btn onClick={() => setStatus('idle')}>Intentar de nuevo</Btn>
+        </Card>
+      )}
+
+      {status === 'done' && (
+        <Card style={{ padding: 40, textAlign: 'center' }}>
+          <div style={{ fontSize: 52, marginBottom: 12 }}>✅</div>
+          <Display style={{ fontWeight: 800, fontSize: 26, color: 'var(--accent)', display: 'block', marginBottom: 8 }}>
+            {imported} transacciones importadas
+          </Display>
+          <Mono style={{ color: 'var(--muted)', display: 'block', marginBottom: 28 }}>
+            Los datos ya están en Ingresos y Gastos.
+          </Mono>
+          <Btn onClick={() => { setStatus('idle'); setRows([]); }}>Importar otro archivo</Btn>
+        </Card>
+      )}
+
+      {status === 'preview' && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 16, marginBottom: 22 }}>
+            {[
+              { l: 'Encontradas', v: rows.length, c: 'var(--text)' },
+              { l: 'Seleccionadas', v: selectedCount, c: 'var(--accent)' },
+              { l: 'Total Cargos', v: clp(rows.filter(r=>r.selected&&r.tipo==='gasto').reduce((s,r)=>s+r.cargo,0)), c: 'var(--red)' },
+              { l: 'Total Abonos', v: clp(rows.filter(r=>r.selected&&r.tipo==='ingreso').reduce((s,r)=>s+r.abono,0)), c: 'var(--accent)' },
+            ].map(s => (
+              <Card key={s.l} style={{ padding: '16px 20px' }}>
+                <Mono style={{ fontSize: 11, color: 'var(--muted)', display: 'block', marginBottom: 4 }}>{s.l.toUpperCase()}</Mono>
+                <Display style={{ fontWeight: 700, fontSize: 22, color: s.c }}>{s.v}</Display>
+              </Card>
+            ))}
+          </div>
+
+          <Card style={{ marginBottom: 16 }}>
+            <div style={{ padding: '12px 16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: '1px solid var(--border)' }}>
+              <Display style={{ fontWeight: 700, fontSize: 15, color: 'var(--dim)' }}>Revisar y ajustar transacciones</Display>
+              <div style={{ display: 'flex', gap: 10 }}>
+                <Btn variant="ghost" sm onClick={toggleAll}>{rows.every(r=>r.selected) ? 'Deseleccionar todo' : 'Seleccionar todo'}</Btn>
+                <Btn onClick={doImport}>⇩ Importar {selectedCount} registro{selectedCount !== 1 ? 's' : ''}</Btn>
+              </div>
+            </div>
+            <div style={{ overflowX: 'auto' }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                <thead>
+                  <tr>
+                    {['', 'Fecha', 'Descripción', 'Tipo', 'Categoría', 'Cargo', 'Abono'].map((h, i) => (
+                      <th key={i} style={{ textAlign: 'left', padding: '9px 12px', fontFamily: 'var(--mono)', fontSize: 11, color: 'var(--muted)', letterSpacing: '0.07em', borderBottom: '1px solid var(--border)', whiteSpace: 'nowrap' }}>
+                        {h.toUpperCase()}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(row => (
+                    <tr key={row.id} className="row-tr" style={{ borderBottom: '1px solid var(--border)', opacity: row.selected ? 1 : 0.4, transition: 'opacity 0.15s' }}>
+                      <td style={{ padding: '7px 12px' }}>
+                        <input type="checkbox" checked={row.selected} onChange={() => toggleRow(row.id)}
+                          style={{ accentColor: 'var(--accent)', width: 15, height: 15, cursor: 'pointer' }} />
+                      </td>
+                      <td style={{ padding: '7px 12px' }}><Mono style={{ fontSize: 12, color: 'var(--muted)', whiteSpace: 'nowrap' }}>{row.fecha}</Mono></td>
+                      <td style={{ padding: '7px 12px', maxWidth: 260 }}>
+                        <span style={{ fontSize: 13, color: 'var(--text)', display: 'block', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={row.desc}>{row.desc}</span>
+                      </td>
+                      <td style={{ padding: '7px 12px' }}>
+                        <select value={row.tipo} onChange={e => updateRow(row.id, 'tipo', e.target.value)}
+                          style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', color: row.tipo === 'ingreso' ? 'var(--accent)' : 'var(--red)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer' }}>
+                          <option value="gasto">↓ Gasto</option>
+                          <option value="ingreso">↑ Ingreso</option>
+                        </select>
+                      </td>
+                      <td style={{ padding: '7px 12px' }}>
+                        <select value={row.cat} onChange={e => updateRow(row.id, 'cat', e.target.value)}
+                          style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 6, padding: '4px 8px', color: 'var(--text)', fontFamily: 'var(--mono)', fontSize: 12, cursor: 'pointer' }}>
+                          {(row.tipo === 'ingreso' ? ingresosCats : gastosCats).map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                      </td>
+                      <td style={{ padding: '7px 12px' }}>
+                        {row.cargo > 0 && <Mono style={{ color: 'var(--red)', fontSize: 13 }}>{clp(row.cargo)}</Mono>}
+                      </td>
+                      <td style={{ padding: '7px 12px' }}>
+                        {row.abono > 0 && <Mono style={{ color: 'var(--accent)', fontSize: 13 }}>{clp(row.abono)}</Mono>}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+
+          <div style={{ display: 'flex', gap: 12, justifyContent: 'flex-end' }}>
+            <Btn variant="ghost" onClick={() => { setStatus('idle'); setRows([]); }}>Cancelar</Btn>
+            <Btn onClick={doImport}>⇩ Importar {selectedCount} registro{selectedCount !== 1 ? 's' : ''}</Btn>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
