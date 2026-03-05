@@ -837,6 +837,47 @@ function Gastos() {
 // ─── INVERSIONES ───────────────────────────────────────────────────────────────
 const TIPOS_V = ["DAP", "Renta Fija", "Renta Variable", "Fondos Mutuos", "Acciones", "Criptomonedas", "Bienes Raíces", "Otro"];
 
+// ─── DATE PICKER ───────────────────────────────────────────────────────────────
+function DatePicker({ value, onChange, label }) {
+  const days = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
+  const months = [
+    { value: '01', label: 'Enero' }, { value: '02', label: 'Febrero' },
+    { value: '03', label: 'Marzo' }, { value: '04', label: 'Abril' },
+    { value: '05', label: 'Mayo' }, { value: '06', label: 'Junio' },
+    { value: '07', label: 'Julio' }, { value: '08', label: 'Agosto' },
+    { value: '09', label: 'Septiembre' }, { value: '10', label: 'Octubre' },
+    { value: '11', label: 'Noviembre' }, { value: '12', label: 'Diciembre' },
+  ];
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: 10 }, (_, i) => String(currentYear - 2 + i));
+
+  const [y, m, d] = value ? value.split('-') : [String(currentYear), '01', '01'];
+
+  const handle = (part, val) => {
+    const parts = { y, m, d };
+    parts[part] = val;
+    onChange(`${parts.y}-${parts.m}-${parts.d}`);
+  };
+
+  const sel = (val, options, part) => (
+    <select value={val} onChange={e => handle(part, e.target.value)} style={{
+      flex: 1, background: 'var(--bg)', border: '1px solid var(--border)',
+      borderRadius: 8, padding: '9px 10px', color: 'var(--text)',
+      fontFamily: 'var(--mono)', fontSize: 13, outline: 'none', cursor: 'pointer'
+    }}>
+      {options.map(o => <option key={o.value || o} value={o.value || o}>{o.label || o}</option>)}
+    </select>
+  );
+
+  return (
+    <div style={{ display: 'flex', gap: 6 }}>
+      {sel(d, days.map(v => ({ value: v, label: v })), 'd')}
+      {sel(m, months, 'm')}
+      {sel(y, years.map(v => ({ value: v, label: v })), 'y')}
+    </div>
+  );
+}
+
 function Inversiones() {
   const { data, totV, add, update, remove } = useF();
   const [modal, setModal] = useState(false);
@@ -846,8 +887,8 @@ function Inversiones() {
   const [sortBy, setSortBy] = useState("fecha");
   const [sortDesc, setSortDesc] = useState(true);
 
-  const blank = () => ({ nombre: "", tipo: "DAP", monto: "", fecha: new Date().toISOString().slice(0, 10), rendimiento: "", rendimientoTipo: "anual", notas: "", fechaTermino: "" });
-  const open = (item = null) => { setForm(item ? { ...item, monto: String(item.monto), rendimiento: String(item.rendimiento || ""), rendimientoTipo: item.rendimientoTipo || "anual", fechaTermino: item.fechaTermino || "" } : blank()); setEditing(item?.id || null); setModal(true); };
+  const blank = () => ({ nombre: "", tipo: "DAP", monto: "", fecha: new Date().toISOString().slice(0, 10), rendimiento: "", rendimientoTipo: "anual", notas: "", fechaTermino: "", ganancia: "" });
+  const open = (item = null) => { setForm(item ? { ...item, monto: String(item.monto), rendimiento: String(item.rendimiento || ""), rendimientoTipo: item.rendimientoTipo || "anual", fechaTermino: item.fechaTermino || "", ganancia: String(item.ganancia || "") } : blank()); setEditing(item?.id || null); setModal(true); };
   const close = () => setModal(false);
   const save = () => {
     const item = {
@@ -857,6 +898,7 @@ function Inversiones() {
       rendimientoTipo: form.rendimientoTipo || "anual",
       fechaTermino: form.tipo === "DAP" && form.fechaTermino ? form.fechaTermino : null,
       notas: form.notas || null,
+      ganancia: form.ganancia !== "" ? parseFloat(form.ganancia) : null,
     };
     editing ? update("inversiones", editing, item) : add("inversiones", item);
     close();
@@ -1016,20 +1058,21 @@ function Inversiones() {
       </Card>
 
       {modal && (
-        <CrudModal
-          title={editing ? "Editar Inversión" : "Nueva Inversión"}
-          fields={[
-            { key: "nombre", label: "Nombre", placeholder: "Ej: DAP BancoEstado" },
-            { key: "tipo", label: "Tipo", type: "select", options: TIPOS_V },
-            { key: "monto", label: "Monto CLP", type: "number", placeholder: "0" },
-            { key: "rendimientoTipo", label: "Período Rend", type: "select", options: [{ value: "anual", label: "Anual" }, { value: "mensual", label: "Mensual" }] },
-            { key: "rendimiento", label: "Rendimiento %", type: "number", placeholder: "0.0" },
-            { key: "fecha", label: "Fecha de Inicio", type: "date" },
-            ...(form.tipo === "DAP" ? [{ key: "fechaTermino", label: "Fecha de Término", type: "date" }] : []),
-            { key: "notas", label: "Notas", placeholder: "Observaciones..." },
-          ]}
-          form={form} setForm={setForm} onSave={save} onClose={close}
-        />
+        <Modal title={editing ? "Editar Inversión" : "Nueva Inversión"} onClose={close}>
+          <Fld label="Nombre"><Inp value={form.nombre} onChange={e => setForm(p => ({ ...p, nombre: e.target.value }))} placeholder="Ej: DAP BancoEstado" /></Fld>
+          <Fld label="Tipo"><Sel value={form.tipo} onChange={e => setForm(p => ({ ...p, tipo: e.target.value }))} options={TIPOS_V} /></Fld>
+          <Fld label="Monto CLP"><Inp type="number" value={form.monto} onChange={e => setForm(p => ({ ...p, monto: e.target.value }))} placeholder="0" /></Fld>
+          <Fld label="Ganancia Estimada CLP"><Inp type="number" value={form.ganancia} onChange={e => setForm(p => ({ ...p, ganancia: e.target.value }))} placeholder="Ej: 5000" /></Fld>
+          <Fld label="Período Rend"><Sel value={form.rendimientoTipo} onChange={e => setForm(p => ({ ...p, rendimientoTipo: e.target.value }))} options={[{ value: "anual", label: "Anual" }, { value: "mensual", label: "Mensual" }]} /></Fld>
+          <Fld label="Rendimiento %"><Inp type="number" value={form.rendimiento} onChange={e => setForm(p => ({ ...p, rendimiento: e.target.value }))} placeholder="0.0" /></Fld>
+          <Fld label="Fecha de Inicio"><DatePicker value={form.fecha} onChange={v => setForm(p => ({ ...p, fecha: v }))} /></Fld>
+          {form.tipo === "DAP" && <Fld label="Fecha de Término"><DatePicker value={form.fechaTermino || new Date().toISOString().slice(0, 10)} onChange={v => setForm(p => ({ ...p, fechaTermino: v }))} /></Fld>}
+          <Fld label="Notas"><Inp value={form.notas} onChange={e => setForm(p => ({ ...p, notas: e.target.value }))} placeholder="Observaciones..." /></Fld>
+          <div style={{ display: "flex", gap: 10, justifyContent: "flex-end", marginTop: 10 }}>
+            <Btn variant="ghost" onClick={close}>Cancelar</Btn>
+            <Btn onClick={save}>Guardar</Btn>
+          </div>
+        </Modal>
       )}
     </div>
   );
