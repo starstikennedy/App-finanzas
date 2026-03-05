@@ -850,7 +850,14 @@ function Inversiones() {
   const open = (item = null) => { setForm(item ? { ...item, monto: String(item.monto), rendimiento: String(item.rendimiento || ""), rendimientoTipo: item.rendimientoTipo || "anual", fechaTermino: item.fechaTermino || "" } : blank()); setEditing(item?.id || null); setModal(true); };
   const close = () => setModal(false);
   const save = () => {
-    const item = { ...form, monto: parseFloat(form.monto) || 0, rendimiento: parseFloat(form.rendimiento) || 0, rendimientoTipo: form.rendimientoTipo || "anual", fechaTermino: form.tipo === "DAP" ? form.fechaTermino : "" };
+    const item = {
+      ...form,
+      monto: parseFloat(form.monto) || 0,
+      rendimiento: form.rendimiento !== "" ? parseFloat(form.rendimiento) : null,
+      rendimientoTipo: form.rendimientoTipo || "anual",
+      fechaTermino: form.tipo === "DAP" && form.fechaTermino ? form.fechaTermino : null,
+      notas: form.notas || null,
+    };
     editing ? update("inversiones", editing, item) : add("inversiones", item);
     close();
   };
@@ -1548,7 +1555,7 @@ function Importar() {
       const [d, m] = r.fecha.split('/');
       const fecha = `${curYear}-${m.padStart(2, '0')}-${d.padStart(2, '0')}`;
       if (r.tipo === 'ingreso') add('ingresos', { nombre: r.desc, categoria: r.cat, monto: r.abono, fecha, recurrente: false });
-      else add('gastos', { nombre: r.desc, categoria: r.cat, monto: r.cargo, fecha, recurrente: false });
+      else add('gastos', { nombre: r.desc, categoria: r.cat, monto: r.cargo, fecha });
     }
     setImported(sel.length); setStatus('done');
   }
