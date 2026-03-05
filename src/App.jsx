@@ -3,6 +3,7 @@ import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
 } from "recharts";
+import { supabase } from "./supabaseClient";
 
 // ─── STYLES ────────────────────────────────────────────────────────────────────
 const css = `
@@ -97,22 +98,70 @@ function load() {
   catch { return SEED; }
 }
 
-function Provider({ children }) {
-  const [data, setData] = useState(load);
-  useEffect(() => { localStorage.setItem("fin_mauri", JSON.stringify(data)); }, [data]);
+function Provider({ children, user }) {
+  const [data, setData] = useState({ ingresos: [], gastos: [], inversiones: [] });
 
-  const add = (k, item) => setData(d => ({ ...d, [k]: [...d[k], { ...item, id: Date.now() }] }));
-  const update = (k, id, upd) => setData(d => ({ ...d, [k]: d[k].map(x => x.id === id ? { ...x, ...upd } : x) }));
-  const remove = (k, id) => setData(d => ({ ...d, [k]: d[k].filter(x => x.id !== id) }));
+  useEffect(() => {
+    if (!user) return;
+    const fetchAll = async () => {
+      const { data: i } = await supabase.from("ingresos").select("*");
+      const { data: g } = await supabase.from("gastos").select("*");
+      const { data: v } = await supabase.from("inversiones").select("*");
+      setData({
+        ingresos: i || [],
+        gastos: g || [],
+        inversiones: v || []
+      });
+    };
+    fetchAll();
+  }, [user]);
 
-  const totI = data.ingresos.reduce((s, x) => s + (x.monto || 0), 0);
-  const totG = data.gastos.reduce((s, x) => s + (x.monto || 0), 0);
-  const totV = data.inversiones.reduce((s, x) => s + (x.monto || 0), 0);
+  const add = async (k, item) => {
+    const { data: user } = await supabase.auth.getUser();
+    if (!user?.user) return;
+
+    const dbItem = { ...item, user_id: user.user.id };
+    // Optimistic UI update
+    const newId = Date.now();
+    setData(d => ({ ...d, [k]: [...d[k], { ...item, id: newId }] }));
+
+    // Remote update
+    const { data: insertedData, error } = await supabase.from(k).insert([dbItem]).select();
+
+    if (!error && insertedData?.[0]) {
+      // Replace optimistic ID with real Supabase UUID
+      setData(d => ({ ...d, [k]: d[k].map(x => x.id === newId ? insertedData[0] : x) }));
+    } else {
+      console.error("Error adding:", error);
+      // Revert optimism on error
+      setData(d => ({ ...d, [k]: d[k].filter(x => x.id !== newId) }));
+    }
+  };
+
+  const update = async (k, id, upd) => {
+    // Optimistic UI
+    setData(d => ({ ...d, [k]: d[k].map(x => x.id === id ? { ...x, ...upd } : x) }));
+    // Remote
+    const { error } = await supabase.from(k).update(upd).eq("id", id);
+    if (error) console.error("Error updating:", error);
+  };
+
+  const remove = async (k, id) => {
+    // Optimistic UI
+    setData(d => ({ ...d, [k]: d[k].filter(x => x.id !== id) }));
+    // Remote
+    const { error } = await supabase.from(k).delete().eq("id", id);
+    if (error) console.error("Error deleting:", error);
+  };
+
+  const totI = (data?.ingresos || []).reduce((s, x) => s + (x.monto || 0), 0);
+  const totG = (data?.gastos || []).reduce((s, x) => s + (x.monto || 0), 0);
+  const totV = (data?.inversiones || []).reduce((s, x) => s + (x.monto || 0), 0);
   const margen = totI - totG;
   const margenPct = totI > 0 ? ((margen / totI) * 100).toFixed(1) : "0.0";
 
   return (
-    <Ctx.Provider value={{ data, totI, totG, totV, margen, margenPct, add, update, remove }}>
+    <Ctx.Provider value={{ data: data || { ingresos: [], gastos: [], inversiones: [] }, totI, totG, totV, margen, margenPct, add, update, remove }}>
       {children}
     </Ctx.Provider>
   );
@@ -327,6 +376,9 @@ function Sidebar({ active, setActive }) {
         <Mono style={{ fontSize: 14, color: "var(--muted)" }}>
           {new Date().toLocaleDateString("es-CL", { month: "long", year: "numeric" }).toUpperCase()}
         </Mono>
+      </div>
+      <div style={{ padding: "14px 24px" }}>
+        <button onClick={() => supabase.auth.signOut()} style={{ ...Btn({ variant: "danger" }).props.style, width: "100%", textAlign: "center", display: "block" }}>Cerrar Sesión</button>
       </div>
     </aside>
   );
@@ -1612,15 +1664,98 @@ function Importar() {
   );
 }
 
+// ─── AUTH ──────────────────────────────────────────────────────────────────────
+function Auth() {
+  const [loading, setLoading] = useState(false);
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [isLogin, setIsLogin] = useState(true);
+  const [msg, setMsg] = useState("");
+
+  const handleAuth = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setMsg("");
+    const { error } = isLogin
+      ? await supabase.auth.signInWithPassword({ email, password })
+      : await supabase.auth.signUp({ email, password });
+
+    if (error) setMsg(error.message);
+    else if (!isLogin) setMsg("Revisa tu correo para confirmar el registro.");
+    setLoading(false);
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", background: "var(--bg)" }}>
+      <Card style={{ padding: "40px", width: "100%", maxWidth: "420px", animation: "fadeUp 0.3s ease" }}>
+        <div style={{ textAlign: "center", marginBottom: 32 }}>
+          <Display style={{ fontWeight: 900, fontSize: 28, color: "var(--accent)", display: "block", letterSpacing: "-1px" }}>MAURI</Display>
+          <Mono style={{ fontSize: 13, color: "var(--muted)", letterSpacing: "0.15em", marginTop: 4 }}>FINANZAS PERSONALES</Mono>
+        </div>
+
+        <form onSubmit={handleAuth} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <Fld label="Correo Electrónico">
+            <Inp type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="tucorreo@ejemplo.com" required />
+          </Fld>
+          <Fld label="Contraseña">
+            <Inp type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required />
+          </Fld>
+
+          {msg && <Mono style={{ fontSize: 12, color: "var(--red)", textAlign: "center" }}>{msg}</Mono>}
+
+          <div style={{ marginTop: 8 }}>
+            <Btn style={{ width: "100%" }} disabled={loading}>
+              {loading ? "Cargando..." : (isLogin ? "Iniciar Sesión" : "Registrarse")}
+            </Btn>
+          </div>
+        </form>
+
+        <div style={{ textAlign: "center", marginTop: 20 }}>
+          <button onClick={() => { setIsLogin(!isLogin); setMsg(""); }} style={{ background: "none", border: "none", color: "var(--dim)", fontFamily: "var(--mono)", fontSize: 13, textDecoration: "underline" }}>
+            {isLogin ? "¿No tienes cuenta? Regístrate" : "¿Ya tienes cuenta? Inicia sesión"}
+          </button>
+        </div>
+      </Card>
+    </div>
+  );
+}
+
 // ─── ROOT ──────────────────────────────────────────────────────────────────────
 const PAGES = { dashboard: Dashboard, ingresos: Ingresos, gastos: Gastos, inversiones: Inversiones, margen: Margen, kpis: KPIs, importar: Importar };
 
 export default function App() {
   const [active, setActive] = useState("dashboard");
+  const [session, setSession] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setLoading(false);
+    });
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+    });
+
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (loading) return <div style={{ minHeight: "100vh", background: "var(--bg)", display: "flex", alignItems: "center", justifyContent: "center" }}><Mono style={{ color: "var(--accent)" }}>Cargando...</Mono></div>;
+
+  if (!session) return (
+    <>
+      <style>{css}</style>
+      <Auth />
+    </>
+  );
+
   const Page = PAGES[active];
 
   return (
-    <Provider>
+    <Provider user={session.user}>
       <style>{css}</style>
       <div style={{ display: "flex", minHeight: "100vh" }}>
         <Sidebar active={active} setActive={setActive} />
